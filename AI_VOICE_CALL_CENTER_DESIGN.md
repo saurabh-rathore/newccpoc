@@ -23,7 +23,7 @@
 +-----------------+      +----------+-----------+      +---------------------+
 |                 |      |                      |      |                     |
 |   Databases     |<---->| Text-to-Speech       |<---->|  Vector Database    |
-| (Postgres)      |      | (Coqui TTS)          |      |  (Qdrant)           |
+| (MySQL)      |      | (Coqui TTS)          |      |  (Qdrant)           |
 |                 |      |                      |      |                     |
 +-----------------+      +----------------------+      +---------------------+
        ^
@@ -47,7 +47,7 @@
 | **Language Model**     | **Mixtral 8x7B**          | Understands user intent, generates human-like responses, and performs tool-calling to interact with APIs. |
 | **Text-to-Speech**     | **Coqui TTS**             | Converts the LLM's text response into natural, emotionally expressive audio.                         |
 | **Vector Database**    | **Qdrant**                | Stores embeddings of past conversations and knowledge base articles for efficient retrieval (RAG).      |
-| **Customer Database**  | **PostgreSQL**            | Stores customer profiles, call logs, and other structured data.                                    |
+| **Customer Database**  | **MySQL**            | Stores customer profiles, call logs, and other structured data.                                    |
 | **External APIs**      | **REST (Mocked)**         | Provides access to billing, complaint, and network status information.                             |
 | **Message Queue**      | **RabbitMQ**              | Decouples services and manages asynchronous tasks like post-call processing.                       |
 | **Cache**              | **Redis**                 | Caches frequently accessed data to reduce latency.                                               |
@@ -59,12 +59,12 @@
 3.  **Audio Streaming:** The Gateway establishes a WebSocket connection and starts receiving the audio stream (RTP) from Asterisk.
 4.  **Real-time Transcription:** The audio stream is forwarded to the Whisper STT service, which converts speech to text in real-time.
 5.  **Intent Analysis:** The transcribed text is sent to the AI Core Logic, which uses the Mixtral LLM to determine the caller's intent (e.g., "billing query," "network complaint") and sentiment.
-6.  **Data Retrieval (RAG):** The Core Logic queries the Qdrant vector database for relevant information from past conversations or knowledge base articles. It also queries the PostgreSQL database and external APIs for customer-specific data.
+6.  **Data Retrieval (RAG):** The Core Logic queries the Qdrant vector database for relevant information from past conversations or knowledge base articles. It also queries the MySQL database and external APIs for customer-specific data.
 7.  **Response Generation:** The retrieved information is combined with the user's query and fed into the Mixtral LLM to generate a contextual and accurate response.
 8.  **Speech Synthesis:** The LLM's text response is sent to the Coqui TTS service, which generates audio with the appropriate emotional tone (e.g., empathetic for a complaint, cheerful for a query).
 9.  **Audio Playback:** The generated audio is streamed back to the AI Voice Gateway and played to the caller via Asterisk.
 10. **Human Escalation:** If the AI's confidence is low, the caller's sentiment is highly negative, or the caller explicitly asks for a human, the Core Logic instructs the Gateway to transfer the call to a human agent queue in Asterisk.
-11. **Post-Call Processing:** After the call ends, the transcript and a summary are stored in the PostgreSQL database. This data is used to update the Qdrant vector database for continuous learning.
+11. **Post-Call Processing:** After the call ends, the transcript and a summary are stored in the MySQL database. This data is used to update the Qdrant vector database for continuous learning.
 
 ## 4. Tech Stack Justification
 
@@ -74,7 +74,7 @@
 *   **Mixtral 8x7B:** A powerful open-source Mixture of Experts (MoE) model that provides excellent performance and is capable of tool-calling.
 *   **Coqui TTS:** A leading open-source TTS engine with a wide variety of high-quality voices and support for emotional expression.
 *   **Qdrant:** A fast and scalable open-source vector database, perfect for RAG-based applications.
-*   **PostgreSQL:** A reliable and feature-rich open-source relational database.
+*   **MySQL:** A reliable and feature-rich open-source relational database.
 *   **RabbitMQ & Redis:** Industry-standard open-source tools for building scalable and resilient distributed systems.
 
 ## 5. Docker Architecture
@@ -140,16 +140,17 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
 
-  postgres:
-    image: postgres:13-alpine # Pinned version for production
+  mysql:
+    image: mysql:8.0 # Pinned version for production
     environment:
-      POSTGRES_DB: call_center
-      POSTGRES_USER: ${POSTGRES_USER:-user} # Use environment variables for credentials
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password} # Use environment variables for credentials
+      MYSQL_DATABASE: call_center
+      MYSQL_USER: ${MYSQL_USER:-user} # Use environment variables for credentials
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password} # Use environment variables for credentials
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
 
   rabbitmq:
     image: rabbitmq:3-management-alpine # Pinned version for production
@@ -163,7 +164,7 @@ services:
       - "6379:6379"
 
 volumes:
-  postgres_data:
+  mysql_data:
   qdrant_storage:
 ```
 
@@ -297,7 +298,7 @@ def get_contextual_info(query_text, customer_id):
     )
 
     # 3. Retrieve customer data
-    customer_data = postgres_client.get_customer(customer_id)
+    customer_data = mysql_client.get_customer(customer_id)
 
     # 4. Format context for LLM
     context = " ".join([res.payload['text'] for res in search_results])
@@ -308,7 +309,7 @@ def get_contextual_info(query_text, customer_id):
 ## 9. Learning Pipeline
 
 1.  **Post-Call:** A "call ended" event triggers a message to a RabbitMQ queue.
-2.  **Processing Worker:** A Python worker consumes the message, retrieves the full transcript and metadata from PostgreSQL.
+2.  **Processing Worker:** A Python worker consumes the message, retrieves the full transcript and metadata from MySQL.
 3.  **Summarization:** The worker uses the Mixtral LLM to summarize the conversation and extract key entities and outcomes.
 4.  **Knowledge Extraction:** It identifies any new, useful information that could benefit future calls (e.g., a solution to a new problem).
 5.  **Embedding & Storage:** The extracted knowledge is broken down into chunks, converted into embeddings, and stored in the Qdrant vector database.
@@ -343,4 +344,4 @@ A call is transferred to the `human-agent-queue` if any of the following conditi
     *   Create a comprehensive suite of integration tests to ensure all components work together correctly.
 *   **Resilience:**
     *   Configure health checks in Docker Compose to automatically restart failing services.
-    *   Implement a robust backup and recovery strategy for PostgreSQL and Qdrant data.
+    *   Implement a robust backup and recovery strategy for MySQL and Qdrant data.

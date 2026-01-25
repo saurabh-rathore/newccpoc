@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+transformers
+torch
+accelerate
+bitsandbytes
+sentencepiece
+qdrant-client
+sentence-transformers
+auto-gptq
+optimum

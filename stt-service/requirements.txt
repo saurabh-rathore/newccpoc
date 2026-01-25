@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+websockets
+python-dotenv
+faster-whisper
+torch
+torchaudio
+soundfile
+webrtcvad-wheels
