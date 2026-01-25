@@ -1,0 +1,36 @@
+# --- SIP Load Balancer for Asterisk ---
+# This service will provision a cloud load balancer (e.g., AWS NLB)
+# to route external SIP traffic to the Asterisk pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: asterisk-loadbalancer
+  namespace: ai-call-center
+spec:
+  type: LoadBalancer
+  selector:
+    app: asterisk
+  ports:
+  - name: sip-udp
+    port: 5060
+    protocol: UDP
+    targetPort: 5060
+
+---
+# --- WebSocket Load Balancer for AI Voice Gateway ---
+# This service exposes the AI Voice Gateway's media WebSocket
+# endpoint to the internet, so Asterisk can stream media to it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-loadbalancer
+  namespace: ai-call-center
+spec:
+  type: LoadBalancer
+  selector:
+    app: ai-voice-gateway
+  ports:
+  - name: media-ws
+    port: 80
+    protocol: TCP
+    targetPort: 8000

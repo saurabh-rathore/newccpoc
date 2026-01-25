@@ -1,0 +1,94 @@
+# --- Asterisk StatefulSet ---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: asterisk
+  namespace: ai-call-center
+spec:
+  serviceName: "asterisk-service"
+  replicas: 2 # Multiple Asterisk instances for redundancy
+  selector:
+    matchLabels:
+      app: asterisk
+  template:
+    metadata:
+      labels:
+        app: asterisk
+    spec:
+      containers:
+      - name: asterisk
+        image: <your_docker_registry>/asterisk:latest # Custom image with your config
+        ports:
+        - containerPort: 5060
+          protocol: UDP
+        - containerPort: 8088
+          protocol: TCP
+        - containerPort: 10000-10100 # RTP Ports range
+          protocol: UDP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asterisk-service
+  namespace: ai-call-center
+spec:
+  selector:
+    app: asterisk
+  ports:
+  - name: sip-udp
+    port: 5060
+    protocol: UDP
+    targetPort: 5060
+  - name: ari-http
+    port: 8088
+    protocol: TCP
+    targetPort: 8088
+
+# --- Qdrant StatefulSet ---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: ai-call-center
+spec:
+  serviceName: "qdrant-service"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      containers:
+      - name: qdrant
+        image: qdrant/qdrant:v1.7.4
+        ports:
+        - containerPort: 6333
+          name: http
+        volumeMounts:
+        - name: qdrant-storage
+          mountPath: /qdrant/storage
+  volumeClaimTemplates:
+  - metadata:
+      name: qdrant-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "gp2" # AWS specific storage class
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-service
+  namespace: ai-call-center
+spec:
+  selector:
+    app: qdrant
+  ports:
+  - protocol: TCP
+    port: 6333
+    targetPort: 6333

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-voice-gateway
+  namespace: ai-call-center
+spec:
+  replicas: 2 # Start with two replicas for high availability
+  selector:
+    matchLabels:
+      app: ai-voice-gateway
+  template:
+    metadata:
+      labels:
+        app: ai-voice-gateway
+    spec:
+      containers:
+      - name: ai-voice-gateway
+        image: <your_docker_registry>/ai-voice-gateway:latest # Image should be pushed to a registry
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ARI_URL
+          value: "http://asterisk-service.ai-call-center.svc.cluster.local:8088/"
+        - name: MYSQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: external-db-secrets
+              key: MYSQL_HOST
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: external-db-secrets
+              key: MYSQL_USER
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: external-db-secrets
+              key: MYSQL_PASSWORD
+        - name: STT_WS_URL
+          value: "ws://stt-service.ai-call-center.svc.cluster.local:8001/ws/stt"
+        - name: LLM_API_URL
+          value: "http://llm-service.ai-call-center.svc.cluster.local:8002/generate"
+        - name: TTS_WS_URL
+          value: "ws://tts-service.ai-call-center.svc.cluster.local:8003/ws/tts"
+        - name: GATEWAY_WS_URL_BASE
+          value: "ws://<your_gateway_external_url>/ws/media/" # Needs external URL
+        - name: ARI_USER
+          valueFrom:
+            secretKeyRef:
+              name: asterisk-secrets
+              key: ari_user
+        - name: ARI_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: asterisk-secrets
+              key: ari_password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-voice-gateway
+  namespace: ai-call-center
+spec:
+  selector:
+    app: ai-voice-gateway
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000

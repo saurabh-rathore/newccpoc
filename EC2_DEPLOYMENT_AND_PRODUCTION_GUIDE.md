@@ -4,7 +4,7 @@ This guide provides simplified instructions for deploying the AI Voice Call Cent
 
 ---
 
-## Part 1: EC2 Deployment Guide
+## Part 1: Single-Node Deployment (Prototype/Demo)
 
 ### EC2 Instance Requirements: A Critical Note
 
@@ -61,56 +61,75 @@ The second run will complete the setup by building the Docker images (which will
 
 ---
 
-## Part 2: Production Readiness Analysis
+## Part 2: Production-Grade Deployment with Kubernetes (EKS)
 
-You asked if these are "production-ready components." This is a nuanced question. The answer is that the system as-is constitutes a **feature-complete and architecturally sound prototype**, but it is **not yet a hardened, scalable, production-grade system.**
+The steps below outline how to deploy the application in a scalable, highly-available production environment using Amazon EKS (Elastic Kubernetes Service).
 
-Here is a breakdown of what that means:
+### Step 1: Set Up an EKS Cluster
 
-### What IS Production-Ready?
+1.  **Install `eksctl` and `kubectl`:** Follow the official AWS documentation to install these command-line tools on your local machine.
+2.  **Create a Cluster Configuration File:** Create a file named `cluster.yaml` with the following content. This defines a cluster with a standard node group for stateless services and a GPU-powered node group for the AI services.
 
-*   **The Architecture:** The microservices-based design is a production best practice. It decouples the components, allowing them to be scaled and updated independently.
-*   **The Technology Choices:** All the selected open-source components (Asterisk, FastAPI, Whisper, Mixtral, Qdrant, etc.) are powerful and widely used in production systems.
-*   **Containerization:** The entire application is containerized with Docker, which is the industry standard for building and deploying applications reliably.
-*   **The Core Logic:** The implementation of the real-time audio streaming, VAD, RAG, and the overall call flow is a solid and functional foundation.
+    ```yaml
+    apiVersion: eksctl.io/v1alpha5
+    kind: ClusterConfig
 
-### What Additional Steps are Required for Production?
+    metadata:
+      name: ai-call-center-cluster
+      region: <your-aws-region>
 
-To take this system from a functional prototype to a hardened, highly-available service capable of handling thousands of concurrent calls, you would need to address the following areas:
+    nodeGroups:
+      - name: standard-workers
+        instanceType: t3.medium
+        desiredCapacity: 2
+      - name: gpu-workers
+        instanceType: g4dn.xlarge
+        desiredCapacity: 2
+        taints:
+          - key: nvidia.com/gpu
+            value: "true"
+            effect: NoSchedule
+    ```
+3.  **Launch the Cluster:**
+    ```bash
+    eksctl create cluster -f cluster.yaml
+    ```
+    *(This will take 15-20 minutes to provision).*
 
-**1. Scalability and High Availability:**
-*   **Current State:** The system runs on a single host using `docker-compose`. This is a single point of failure and has a hard limit on capacity.
-*   **Production Step:** Move from `docker-compose` to a container orchestration platform like **Kubernetes** (e.g., Amazon EKS).
-    *   This would allow you to run a **cluster of Asterisk servers** behind a SIP load balancer (like Kamailio).
-    *   You could **scale the AI microservices independently.** For example, you might need 10 STT containers for every 3 LLM containers.
-    *   Kubernetes provides self-healing and automated rollouts, which are essential for high availability.
+### Step 2: Build and Push Docker Images
 
-**2. Managed Database and Storage:**
-*   **Current State:** The MySQL and Qdrant databases run as single Docker containers on the same host. This is not robust.
-*   **Production Step:** Use managed cloud services.
-    *   **Database:** Use **Amazon RDS for MySQL**. This provides automated backups, failover, and scaling.
-    *   **Vector DB:** Use **Qdrant Cloud** or set up a self-hosted, highly-available Qdrant cluster.
-    *   This separates your critical data storage from the application compute, improving resilience.
+The Kubernetes cluster needs access to the service images. You cannot build them locally on the cluster nodes. Instead, you must build them and push them to a container registry like Amazon ECR (Elastic Container Registry).
 
-**3. Monitoring, Logging, and Alerting:**
-*   **Current State:** The system produces logs within Docker, but there is no centralized monitoring.
-*   **Production Step:** Implement a comprehensive monitoring stack.
-    *   **Metrics:** Deploy **Prometheus** to scrape metrics from all services.
-    *   **Dashboards:** Use **Grafana** to build dashboards for monitoring call volume, AI service latency, GPU utilization, and error rates.
-    *   **Logging:** Centralize all container logs into a service like **OpenSearch** (AWS's version of ELK) or Datadog for easy searching and analysis.
-    *   **Alerting:** Set up alerts (e.g., with Alertmanager) to notify an on-call team if latency spikes or a service fails.
+1.  **Create ECR Repositories:** For each service (`ai-voice-gateway`, `stt-service`, etc.), create a repository in the ECR console.
+2.  **Authenticate Docker with ECR:**
+    ```bash
+    aws ecr get-login-password --region <your-aws-region> | docker login --username AWS --password-stdin <your-aws-account-id>.dkr.ecr.<your-aws-region>.amazonaws.com
+    ```
+3.  **Build, Tag, and Push each image:**
+    ```bash
+    # For the ai-voice-gateway service
+    docker build -t <your_ecr_repo_uri>/ai-voice-gateway:latest ./ai-voice-gateway
+    docker push <your_ecr_repo_uri>/ai-voice-gateway:latest
 
-**4. Advanced Security:**
-*   **Current State:** Basic security is handled (no hardcoded secrets).
-*   **Production Step:** Harden the deployment.
-    *   **Networking:** Deploy the entire stack within an **Amazon VPC** with strict firewall rules and network policies, ensuring services can only communicate with each other on expected ports.
-    *   **Secrets Management:** Move secrets from the `.env` file into a dedicated service like **AWS Secrets Manager**.
-    *   **API Gateway:** Consider placing the AI Voice Gateway behind an API Gateway for better traffic management and security, though this is less critical for the internal ARI communication.
+    # Repeat for stt-service, llm-service, and tts-service
+    ```
 
-**5. CI/CD Pipeline:**
-*   **Current State:** Deployment is manual (running a script on the server).
-*   **Production Step:** Create a full CI/CD (Continuous Integration/Continuous Deployment) pipeline using tools like **GitHub Actions or Jenkins**. This pipeline would automatically build, test, and deploy any new changes to your Kubernetes cluster, ensuring that updates are reliable and frequent.
+### Step 3: Deploy to EKS
 
-### Conclusion
+1.  **Update Manifests:**
+    *   In the `kubernetes/*.yaml` files, replace all instances of `<your_docker_registry>` with your actual ECR repository URI.
+    *   In `kubernetes/05-secrets.yaml`, replace the placeholder values with your actual database credentials.
+2.  **Apply the Manifests:**
+    ```bash
+    # Apply the namespace, then secrets, then all other configurations
+    kubectl apply -f kubernetes/00-namespace.yaml
+    kubectl apply -f kubernetes/05-secrets.yaml
+    kubectl apply -f kubernetes/
+    ```
+3.  **Get Load Balancer IPs:**
+    ```bash
+    kubectl get services -n ai-call-center -w # Wait for the LoadBalancer IPs
+    ```
+    Once the `asterisk-loadbalancer` and `gateway-loadbalancer` have external IPs, the system is live. You will need to use the `asterisk-loadbalancer` IP in your SIP client.
 
-The system you have is a powerful, functional proof-of-concept. It is the perfect foundation. However, "production" implies a level of reliability, scalability, and maintainability that requires moving from a single-host `docker-compose` setup to a fully orchestrated and monitored cloud-native architecture.
+This Kubernetes setup provides the scalability and high availability needed for a true production deployment.
