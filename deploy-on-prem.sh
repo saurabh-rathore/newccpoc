@@ -13,7 +13,14 @@
 set -e # Exit immediately on error
 
 # --- Helper Functions ---
-# ... (script content is the same until the final instructions)
+function print_header() {
+    echo ""
+    echo "================================================================================"
+    echo " $1"
+    echo "================================================================================"
+}
+
+# ... (rest of script is the same until the final instructions)
 
 # --- Final Instructions ---
 print_header "On-Premise Deployment Complete!"
