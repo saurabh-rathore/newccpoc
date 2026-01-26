@@ -82,10 +82,8 @@ for SERVICE in "${SERVICES[@]}"; do
     REPO_NAME="${ECR_REPOSITORY_PREFIX}/${SERVICE}"
     echo "--- Processing service: ${SERVICE} ---"
 
-    # Create ECR repo if it doesn't exist
     aws ecr describe-repositories --repository-names ${REPO_NAME} >/dev/null 2>&1 || aws ecr create-repository --repository-name ${REPO_NAME}
 
-    # Build, tag, and push the image
     docker build -t "${ECR_REGISTRY_URL}/${REPO_NAME}:latest" "./${SERVICE}"
     docker push "${ECR_REGISTRY_URL}/${REPO_NAME}:latest"
     echo "--- Finished service: ${SERVICE} ---"
@@ -93,30 +91,39 @@ done
 
 # --- Step 3: Update and Apply Kubernetes Manifests ---
 print_header "Updating and deploying Kubernetes manifests..."
-# Create a temporary directory for the updated manifests
 mkdir -p ./.tmp_k8s_manifests
 
-# Replace placeholders in manifests
 for FILE in kubernetes/*.yaml; do
     sed "s|<your_docker_registry>|${ECR_REGISTRY_URL}/${ECR_REPOSITORY_PREFIX}|g" "$FILE" > "./.tmp_k8s_manifests/$(basename "$FILE")"
 done
 
 echo "Applying manifests to EKS cluster..."
 kubectl apply -f ./.tmp_k8s_manifests/00-namespace.yaml
-kubectl apply -f ./.tmp_k8s_manifests/05-secrets.yaml # Apply secrets first
+kubectl apply -f ./.tmp_k8s_manifests/05-secrets.yaml
 kubectl apply -f ./.tmp_k8s_manifests/
+
+# --- Step 4: Automatically Configure Gateway External URL ---
+print_header "Waiting for Gateway Load Balancer to get an external hostname..."
+GATEWAY_URL=""
+while [ -z "$GATEWAY_URL" ]; do
+  echo "Waiting for external IP..."
+  GATEWAY_URL=$(kubectl get service gateway-loadbalancer -n ai-call-center -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+  [ -z "$GATEWAY_URL" ] && sleep 10
+done
+echo "Gateway URL found: ${GATEWAY_URL}"
+
+print_header "Injecting external URL into the AI Voice Gateway deployment..."
+GATEWAY_WS_URL_BASE="ws://${GATEWAY_URL}/ws/media/"
+kubectl set env deployment/ai-voice-gateway -n ai-call-center "GATEWAY_WS_URL_BASE=${GATEWAY_WS_URL_BASE}"
 
 # Clean up temporary files
 rm -rf ./.tmp_k8s_manifests
 rm cluster.yaml
 
-# --- Step 4: Final Instructions ---
-print_header "Deployment to EKS is complete!"
-echo "It may take a few minutes for the LoadBalancers to be provisioned and for all pods to be in the 'Running' state."
-echo "Run the following command to watch the status of your services and get the external IPs:"
-echo "kubectl get services -n ai-call-center -w"
-echo ""
-echo "Once the 'asterisk-loadbalancer' has an EXTERNAL-IP, you can use it in your SIP client."
-echo "Please update the 'gateway-loadbalancer' EXTERNAL-IP in your '01-ai-voice-gateway.yaml' manifest and re-apply it if needed for the media stream."
+# --- Step 5: Final Instructions ---
+print_header "Deployment to EKS is complete and fully configured!"
+echo "It may take a few more minutes for the gateway pods to restart with the new environment variable."
+echo "Run the following command to get the external IP for your SIP client:"
+echo "kubectl get service asterisk-loadbalancer -n ai-call-center"
 
 exit 0

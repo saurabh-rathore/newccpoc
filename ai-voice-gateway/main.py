@@ -33,6 +33,12 @@ class CallHandler:
         self.stt_ws = None
         self.tts_ws = None
         self.playback_active = asyncio.Event()
+        self.media_ws_ready = asyncio.Event() # Event to signal media WebSocket connection
+
+    def cleanup(self):
+        """Remove this handler from the global list to prevent memory leaks."""
+        app.state.call_handlers.pop(self.channel.id, None)
+        logger.info(f"[{self.channel.id}] Call handler cleaned up.")
 
     async def handle_call(self):
         try:
@@ -44,12 +50,16 @@ class CallHandler:
 
                 logger.info(f"[{self.channel.id}] Connected to AI services.")
 
-                # Start external media stream from Asterisk to this gateway
                 media_ws_url = f"{GATEWAY_WS_URL_BASE}{self.channel.id}"
                 await self.channel.play(media=f"sound:silence,media_uri={media_ws_url}", format="slin16")
 
-                # Wait for the media WebSocket to connect
-                # (This is handled by the @app.websocket endpoint below)
+                # Wait for the media WebSocket to connect back and be ready
+                try:
+                    await asyncio.wait_for(self.media_ws_ready.wait(), timeout=10.0)
+                    logger.info(f"[{self.channel.id}] Media WebSocket is ready.")
+                except asyncio.TimeoutError:
+                    logger.error(f"[{self.channel.id}] Timed out waiting for media WebSocket.")
+                    return # Exit the call
 
                 await self.play_tts("Welcome to our automated service. How can I help you today?")
 
@@ -58,8 +68,9 @@ class CallHandler:
         except Exception as e:
             logger.error(f"[{self.channel.id}] Error in call: {e}", exc_info=True)
         finally:
-            logger.info(f"[{self.channel.id}] Hanging up call.")
+            logger.info(f"[{self.channel.id}] Hanging up call and cleaning up resources.")
             await self.channel.hangup()
+            self.cleanup() # Ensure cleanup is called
 
     async def process_stt_and_generate_response(self):
         async for message in self.stt_ws:
@@ -68,7 +79,7 @@ class CallHandler:
                 continue
 
             logger.info(f"[{self.channel.id}] Transcription: '{transcription}'")
-            self.playback_active.set() # Interrupt any ongoing playback
+            self.playback_active.set()
 
             llm_response = await self.get_llm_response(transcription)
 
@@ -91,21 +102,14 @@ class CallHandler:
         async for audio_chunk in self.tts_ws:
             if self.playback_active.is_set():
                 break
-            # Send audio back to Asterisk channel's external media stream
-            payload = {
-                "type": "binary",
-                "data": base64.b64encode(audio_chunk).decode('utf-8')
-            }
-            # This requires the Asterisk media WebSocket to be active
-            # We'll rely on the main websocket handler to do the sending
             media_ws = app.state.media_websockets.get(self.channel.id)
             if media_ws:
+                payload = {"type": "binary", "data": base64.b64encode(audio_chunk).decode('utf-8')}
                 await media_ws.send_text(json.dumps(payload))
 
     async def transfer_to_human(self):
         logger.info(f"[{self.channel.id}] Transferring to human agent queue.")
         await self.play_tts("Please wait while I transfer you to a human agent.")
-        # Move the call back into the dialplan at a specific context/extension
         await self.channel.continueInDialplan(context='human-agent-queue-context', extension='human-queue')
 
 
@@ -116,51 +120,50 @@ async def media_websocket_endpoint(websocket: WebSocket, channel_id: str):
     logger.info(f"[{channel_id}] Asterisk media WebSocket connected.")
     app.state.media_websockets[channel_id] = websocket
 
-    # Find the CallHandler for this channel
-    # In a real app, you'd have a more robust way of mapping this
-    call_handler = next((h for h in app.state.call_handlers if h.channel.id == channel_id), None)
-
-    if not call_handler:
+    handler = app.state.call_handlers.get(channel_id)
+    if not handler:
         logger.error(f"[{channel_id}] No CallHandler found for this media stream.")
+        await websocket.close()
         return
+
+    # Signal that the media WebSocket is ready
+    handler.media_ws_ready.set()
 
     try:
         while True:
             message = await websocket.receive_text()
             data = json.loads(message)
             if data['type'] == 'binary':
-                # Decode audio from Asterisk and send to STT
                 audio_chunk = base64.b64decode(data['data'])
-                await call_handler.stt_ws.send(audio_chunk)
+                if handler and handler.stt_ws:
+                    await handler.stt_ws.send(audio_chunk)
 
     except WebSocketDisconnect:
         logger.warning(f"[{channel_id}] Asterisk media WebSocket disconnected.")
     finally:
-        if channel_id in app.state.media_websockets:
-            del app.state.media_websockets[channel_id]
+        app.state.media_websockets.pop(channel_id, None)
 
 # --- ARI Event Handling ---
 async def on_stasis_start(channel, event):
     handler = CallHandler(channel)
-    app.state.call_handlers.append(handler)
+    app.state.call_handlers[channel.id] = handler
     asyncio.create_task(handler.handle_call())
 
 @app.on_event("startup")
 async def startup_event():
     global ari_client
     app.state.media_websockets = {}
-    app.state.call_handlers = []
+    app.state.call_handlers = {} # Use a dictionary for efficient lookup and removal
 
     while True:
         try:
             logger.info("Connecting to ARI...")
             ari_client = await asterisk.ari.connect(ARI_URL, ARI_USER, ARI_PASSWORD)
 
-            async def on_channel_event(channel, event):
-                 # This wrapper is needed to pass the channel object
+            async def on_channel_event_wrapper(channel, event):
                  await on_stasis_start(channel, event)
 
-            ari_client.on_channel_event('StasisStart', on_channel_event)
+            ari_client.on_channel_event('StasisStart', on_channel_event_wrapper)
 
             logger.info("ARI connected and listeners set up.")
             break
