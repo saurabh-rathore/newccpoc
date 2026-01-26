@@ -80,19 +80,14 @@ fi
 
 # --- Step 4: Prepare System for Kubernetes ---
 print_header "Preparing System for Kubernetes"
-# Load required kernel modules
 modprobe overlay
 modprobe br_netfilter
-
-# Set required sysctl params for Kubernetes networking
 cat <<EOF | tee /etc/sysctl.d/k8s.conf
 net.bridge.bridge-nf-call-ip6tables = 1
 net.bridge.bridge-nf-call-iptables = 1
 net.ipv4.ip_forward                 = 1
 EOF
 sysctl --system
-
-# Reset containerd config to be compatible with Kubernetes CRI
 rm -f /etc/containerd/config.toml
 systemctl restart containerd
 nvidia-ctk runtime configure --runtime=docker
@@ -102,7 +97,7 @@ systemctl restart docker
 print_header "Initializing Single-Node Kubernetes Cluster with kubeadm"
 if [ ! -f /etc/kubernetes/admin.conf ]; then
     swapoff -a
-    sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab # Disable swap permanently
+    sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
     kubeadm init --pod-network-cidr=192.168.0.0/16
 
     mkdir -p $HOME/.kube
@@ -113,6 +108,14 @@ if [ ! -f /etc/kubernetes/admin.conf ]; then
         cp -i /etc/kubernetes/admin.conf /home/$SUDO_USER/.kube/config
         chown $SUDO_UID:$SUDO_GID /home/$SUDO_USER/.kube/config
     fi
+
+    # NEW: Wait for Kubernetes API server to be ready
+    echo "Waiting for Kubernetes API server to be ready..."
+    until kubectl get nodes > /dev/null 2>&1; do
+        echo "API server not ready yet. Waiting..."
+        sleep 5
+    done
+    echo "Kubernetes API server is ready."
 
     kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/tigera-operator.yaml
     kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/custom-resources.yaml
