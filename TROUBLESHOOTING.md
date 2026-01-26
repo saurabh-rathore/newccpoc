@@ -4,70 +4,92 @@ This guide provides solutions to common errors and issues you may encounter duri
 
 ---
 
-## Issue 1: `kubectl` commands fail with "connection refused"
+## Issue 1: `kubectl` commands fail with "connection refused" (as a regular user)
 
 ### Symptoms
 
-After running one of the on-premise deployment scripts (`deploy-on-prem.sh` or `deploy-on-prem-cpu.sh`), you try to run a `kubectl` command (e.g., `kubectl get pods`) and see an error similar to this:
-
+After running an on-premise script, you try to run `kubectl get pods` as a regular user and see:
 ```
 The connection to the server <ip_address>:6443 was refused - did you specify the right host or port?
 ```
 
 ### Cause
 
-This is the most common issue after a `kubeadm` installation. The deployment script must be run with `sudo`. When it creates the Kubernetes cluster, the necessary configuration file (`admin.conf`) is placed in the `root` user's home directory (`/etc/kubernetes/`).
-
-Your regular, non-root user does not have this configuration, so `kubectl` does not know how to connect to the new cluster.
+The deployment script was run with `sudo`, so the Kubernetes configuration file was created for the `root` user only. Your regular user does not have access.
 
 ### Solution
 
-You need to copy the configuration file to your own user's home directory. Run the following three commands from your server's terminal:
-
+Run these three commands to copy the configuration to your home directory:
 ```bash
-# 1. Create the .kube directory in your home folder if it doesn't exist
 mkdir -p $HOME/.kube
-
-# 2. Copy the cluster configuration file from the root-owned location
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-
-# 3. Change the ownership of the file to your own user
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 ```
 
-After running these commands, your `kubectl` commands will work correctly.
-
 ---
-## Issue 2: Script fails with "apt lock" or "dpkg lock" error
+
+## Issue 2: `kubectl` commands fail with "connection refused" (even as root)
 
 ### Symptoms
-During the initial run of a deployment script on a fresh Ubuntu server, the script fails with an error message like:
 
-```
-E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process XXXX (unattended-upgr)
-```
+You are running `kubectl` as the `root` user (or using `sudo kubectl`), but you still see the "connection refused" error. This is a more serious issue.
 
 ### Cause
-Fresh Ubuntu servers often run an automatic update process (`unattended-upgrades`) in the background shortly after booting. This process locks the `apt` package manager, preventing any other software from being installed. If the deployment script tries to install dependencies at the same time, it will fail.
 
-### Solution
-This issue has been **fixed in the latest version of the deployment scripts**. The scripts now include a "wait loop" that automatically detects if the package manager is locked and patiently waits for it to become free before proceeding.
+This error means that the **Kubernetes API server itself is not running**. The core "brain" of your Kubernetes cluster has either crashed or failed to start. This is most often caused by insufficient system resources (CPU or RAM) on the server, especially on smaller cloud instances.
 
-If you encounter this error, please ensure you have the latest version of the code.
+### Solution: Diagnose the Control Plane
+
+You need to check the status of the main Kubernetes agent, the `kubelet`.
+
+**Step 1: Check the `kubelet` service status**
+```bash
+sudo systemctl status kubelet
+```
+Look for `Active: active (running)`. If it is `inactive` or `failed`, the cluster has failed to start.
+
+**Step 2: View the `kubelet` logs**
+This is the most important diagnostic step. It will show you the exact error messages.
+```bash
+sudo journalctl -u kubelet -f
+```
+Look for repeating error messages. Common errors include:
+-   "failed to pull image": The cluster is trying to download a core component and failing.
+-   "memory pressure": Your server does not have enough RAM.
+-   "CRI": There is a problem with the container runtime (Docker/containerd).
+
+**Step 3: Check the core container status directly**
+This command bypasses `kubectl` to see what Kubernetes is trying to do.
+```bash
+sudo crictl ps -a
+```
+In a healthy cluster, you should see containers with names like `kube-apiserver`, `kube-scheduler`, `etcd`, etc., in the `Running` state. If they are `Exited` or missing, it confirms the control plane is failing.
+
+**Step 4: Check System Resource Requirements**
+The Kubernetes control plane itself requires a certain amount of resources. For the on-premise scripts, a machine with at least **2 vCPUs and 8 GB of RAM** is recommended for the cluster to be stable, even for the CPU-only testing version. A "medium" instance with less than 8 GB of RAM may not be sufficient.
 
 ---
-## Issue 3: `kubeadm init` fails with "preflight" errors
+
+## Issue 3: Script fails with "apt lock" or "dpkg lock" error
 
 ### Symptoms
-The on-premise deployment script fails during the `kubeadm init` phase with errors like:
-```
-[ERROR CRI]: container runtime is not running...
-[ERROR FileContent--proc-sys-net-bridge-bridge-nf-call-iptables]: ... does not exist
-```
+The script fails with an error like `E: Could not get lock /var/lib/dpkg/lock-frontend`.
+
 ### Cause
-The server's kernel and container runtime (Docker/containerd) are not correctly configured for Kubernetes before `kubeadm` is run.
+A background process (`unattended-upgrades`) on the fresh Ubuntu server has locked the package manager.
 
 ### Solution
-This issue has been **fixed in the latest version of the deployment scripts**. The scripts now include a "Prepare System for Kubernetes" step that automatically loads the required kernel modules, sets the necessary `sysctl` parameters, and resets the `containerd` configuration to ensure all preflight checks pass.
+This issue has been **fixed in the latest version of the deployment scripts**. If you see this, please ensure you have the latest version of the code.
 
-If you encounter this error, please ensure you have the latest version of the code.
+---
+
+## Issue 4: `kubeadm init` fails with "preflight" errors
+
+### Symptoms
+The script fails with errors like `[ERROR CRI]` or `[ERROR FileContent--proc-sys-net-bridge-bridge-nf-call-iptables]`.
+
+### Cause
+The server's kernel or container runtime is not correctly configured for Kubernetes.
+
+### Solution
+This issue has been **fixed in the latest version of the deployment scripts**. If you see this, please ensure you have the latest version of the code.
