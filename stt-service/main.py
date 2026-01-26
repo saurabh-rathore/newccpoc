@@ -5,6 +5,7 @@ import io
 import soundfile as sf
 import numpy as np
 import webrtcvad
+import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 from faster_whisper import WhisperModel
@@ -20,13 +21,16 @@ VAD_FRAME_MS = int(os.getenv("VAD_FRAME_MS", 30))
 VAD_SAMPLE_RATE = 16000
 VAD_FRAME_SAMPLES = int(VAD_SAMPLE_RATE * (VAD_FRAME_MS / 1000.0))
 
-# --- Model Loading ---
+# --- Model Loading (with CPU fallback) ---
 logger.info(f"Loading Whisper model: {MODEL_PATH}")
 try:
-    if os.path.exists(LOCAL_MODEL_PATH):
-        model = WhisperModel(LOCAL_MODEL_PATH, device="cuda", compute_type="float16")
-    else:
-        model = WhisperModel(MODEL_PATH, device="cuda", compute_type="float16")
+    # Auto-detect device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    logger.info(f"Using device: {device} with compute type: {compute_type}")
+
+    model_load_path = LOCAL_MODEL_PATH if os.path.exists(LOCAL_MODEL_PATH) else MODEL_PATH
+    model = WhisperModel(model_load_path, device=device, compute_type=compute_type)
     logger.info("Whisper model loaded successfully.")
 except Exception as e:
     logger.error(f"Failed to load Whisper model: {e}", exc_info=True)
@@ -36,7 +40,6 @@ app = FastAPI()
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 
 class VadWrapper:
-    """A wrapper to manage VAD state for a single WebSocket connection."""
     def __init__(self):
         self.reset()
 
@@ -46,7 +49,6 @@ class VadWrapper:
         self.silence_frames = 0
 
     def process_audio(self, audio_chunk):
-        """Processes an audio chunk, returns a full utterance when detected."""
         is_speech = vad.is_speech(audio_chunk, VAD_SAMPLE_RATE)
 
         if is_speech:
@@ -56,7 +58,6 @@ class VadWrapper:
         elif self.triggered:
             self.speech_buffer.extend(audio_chunk)
             self.silence_frames += 1
-            # End of utterance detection (e.g., 10 frames of silence)
             if self.silence_frames > 10:
                 utterance = self.speech_buffer
                 self.reset()
@@ -73,7 +74,6 @@ async def websocket_stt_endpoint(websocket: WebSocket):
         while True:
             audio_data = await websocket.receive_bytes()
 
-            # Process audio in VAD-compatible frames
             for i in range(0, len(audio_data), VAD_FRAME_SAMPLES * 2):
                 chunk = audio_data[i:i + VAD_FRAME_SAMPLES * 2]
                 if len(chunk) < VAD_FRAME_SAMPLES * 2:

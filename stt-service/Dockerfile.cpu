@@ -1,0 +1,35 @@
+# CPU-only Dockerfile for the STT Service
+FROM python:3.9-slim
+
+# Set non-interactive frontend for package installations
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Git and build tools
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory in the container
+WORKDIR /app
+
+# --- Model Caching ---
+ARG WHISPER_MODEL="distil-whisper/distil-small.en"
+RUN pip3 install huggingface-hub && \
+    huggingface-cli download ${WHISPER_MODEL} --local-dir /models/${WHISPER_MODEL} --local-dir-use-symlinks False
+
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application's code into the container
+COPY . .
+
+# Expose the port the app runs on
+EXPOSE 8001
+
+# Command to run the application
+ENV WHISPER_MODEL=${WHISPER_MODEL}
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
