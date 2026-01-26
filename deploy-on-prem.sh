@@ -108,7 +108,7 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 networking:
-  podNetworkCidr: "192.168.0.0/16"
+  podSubnet: "192.168.0.0/16"
 EOF
 
     kubeadm init --config kubeadm-config.yaml
@@ -141,8 +141,18 @@ fi
 print_header "Setting up On-Premise Kubernetes Components"
 kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
-sleep 15
-kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=300s
+
+echo "Waiting for MetalLB deployment to be created..."
+kubectl wait --namespace metallb-system \
+                --for=condition=available deployment \
+                --selector=app=metallb \
+                --timeout=300s
+echo "Waiting for MetalLB pods to be ready..."
+kubectl wait --namespace metallb-system \
+                --for=condition=ready pod \
+                --selector=app=metallb \
+                --timeout=300s
+
 HOST_IP=$(hostname -I | awk '{print $1}')
 cat <<EOF | kubectl apply -f -
 apiVersion: metallb.io/v1beta1
