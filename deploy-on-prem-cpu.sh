@@ -34,43 +34,54 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # --- Step 1: Install Container Runtime (Docker) ---
-print_header "Installing Docker Engine"
+print_header "Installing Container Runtime"
 if ! command -v docker &> /dev/null; then
-    wait_for_apt_lock
-    apt-get update
-    wait_for_apt_lock
-    apt-get install -y ca-certificates curl
+    wait_for_apt_lock; apt-get update
+    wait_for_apt_lock; apt-get install -y ca-certificates curl
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    wait_for_apt_lock
-    apt-get update
-    wait_for_apt_lock
-    apt-get install -y docker-ce docker-ce-cli containerd.io
+    wait_for_apt_lock; apt-get update
+    wait_for_apt_lock; apt-get install -y docker-ce docker-ce-cli containerd.io
 else
-    echo "Docker already installed. Skipping."
+    echo "Container runtime already installed. Skipping."
 fi
 
 # --- Step 2: Install Kubernetes Tools ---
 print_header "Installing Kubernetes Tools (kubeadm, kubelet, kubectl)"
 if ! command -v kubeadm &> /dev/null; then
-    wait_for_apt_lock
-    apt-get update
-    wait_for_apt_lock
-    apt-get install -y apt-transport-https ca-certificates curl gpg
+    wait_for_apt_lock; apt-get update
+    wait_for_apt_lock; apt-get install -y apt-transport-https ca-certificates curl gpg
     curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
-    wait_for_apt_lock
-    apt-get update
-    wait_for_apt_lock
-    apt-get install -y kubelet kubeadm kubectl
+    wait_for_apt_lock; apt-get update
+    wait_for_apt_lock; apt-get install -y kubelet kubeadm kubectl
     apt-mark hold kubelet kubeadm kubectl
 else
     echo "Kubernetes tools already installed. Skipping."
 fi
 
-# --- Step 3: Initialize Kubernetes Cluster ---
+# --- Step 3: Prepare System for Kubernetes ---
+print_header "Preparing System for Kubernetes"
+# Load required kernel modules
+modprobe overlay
+modprobe br_netfilter
+
+# Set required sysctl params for Kubernetes networking
+cat <<EOF | tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sysctl --system
+
+# Reset containerd config to be compatible with Kubernetes CRI
+rm -f /etc/containerd/config.toml
+systemctl restart containerd
+systemctl restart docker
+
+# --- Step 4: Initialize Kubernetes Cluster ---
 print_header "Initializing Single-Node Kubernetes Cluster with kubeadm"
 if [ ! -f /etc/kubernetes/admin.conf ]; then
     swapoff -a
@@ -94,9 +105,8 @@ else
     echo "Kubernetes cluster already initialized. Skipping."
 fi
 
-# --- Step 4: Setup On-Premise Components (LoadBalancer, Registry) ---
+# --- Step 5: Setup On-Premise Components ---
 print_header "Setting up On-Premise Kubernetes Components"
-# MetalLB
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/native/metallb-native.yaml
 sleep 15
 kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=300s
@@ -111,8 +121,6 @@ spec:
   addresses:
   - ${HOST_IP}-${HOST_IP}
 EOF
-
-# Local Docker Registry
 docker run -d -p 5000:5000 --restart=always --name registry registry:2
 cat << EOF > /etc/docker/daemon.json
 {
@@ -121,25 +129,19 @@ cat << EOF > /etc/docker/daemon.json
 EOF
 systemctl restart docker
 
-# --- Step 5: Build and Push CPU Images to Local Registry ---
+# --- Step 6: Build and Push CPU Images ---
 print_header "Building and pushing CPU-specific service images to local registry"
 SERVICES=("ai-voice-gateway" "stt-service" "llm-service" "tts-service" "asterisk")
 for SERVICE in "${SERVICES[@]}"; do
     DOCKERFILE_PATH="./${SERVICE}/Dockerfile"
-    # Use the CPU-specific Dockerfile if it exists
     if [ -f "./${SERVICE}/Dockerfile.cpu" ]; then
         DOCKERFILE_PATH="./${SERVICE}/Dockerfile.cpu"
-        echo "--- Building ${SERVICE} (CPU version) ---"
-    else
-        echo "--- Building ${SERVICE} ---"
     fi
-
     docker build -f "${DOCKERFILE_PATH}" -t "localhost:5000/${SERVICE}:latest" "./${SERVICE}"
-    echo "--- Pushing ${SERVICE} ---"
     docker push "localhost:5000/${SERVICE}:latest"
 done
 
-# --- Step 6: Deploy the Application using CPU Manifests ---
+# --- Step 7: Deploy the Application (CPU Version) ---
 print_header "Deploying the AI Voice Call Center Application (CPU Version)"
 mkdir -p ./.tmp_cpu_manifests
 for FILE in kubernetes-cpu/*.yaml; do
@@ -147,17 +149,12 @@ for FILE in kubernetes-cpu/*.yaml; do
         -e "s|storageClassName: \"gp2\"|# storageClassName: \"gp2\"|g" \
         "$FILE" > "./.tmp_cpu_manifests/$(basename "$FILE")"
 done
-
 kubectl apply -f ./.tmp_cpu_manifests/00-namespace.yaml
 kubectl apply -f ./.tmp_cpu_manifests/05-secrets.yaml
 kubectl apply -f ./.tmp_cpu_manifests/
 
 # --- Final Instructions ---
 print_header "CPU-Only On-Premise Deployment Complete!"
-echo "A single-node Kubernetes cluster has been created and the application is deployed."
-echo "WARNING: Performance will be very slow. This is for functional testing only."
 echo "Run 'kubectl get pods -n ai-call-center -w' to check status."
 echo "The external IP for the SIP service is: ${HOST_IP}"
-echo "Use this IP in your SIP client."
-
 exit 0
