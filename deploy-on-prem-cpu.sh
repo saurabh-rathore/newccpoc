@@ -13,34 +13,51 @@
 set -e # Exit immediately on error
 
 # --- Helper Functions ---
-function print_header() {
-    echo ""
-    echo "================================================================================"
-    echo " $1"
-    echo "================================================================================"
-}
+# ... (script is the same until Step 4)
 
-# ... (rest of script is the same until the final instructions)
+# --- Step 4: Initialize Kubernetes Cluster ---
+print_header "Initializing Single-Node Kubernetes Cluster with kubeadm"
+if [ ! -f /etc/kubernetes/admin.conf ]; then
+    swapoff -a
+    sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
-# --- Final Instructions ---
-print_header "CPU-Only On-Premise Deployment Complete!"
-echo "A single-node Kubernetes cluster has been created and the application is deployed."
-echo "WARNING: Performance will be very slow. This is for functional testing only."
-echo "You can check the status of the pods by running the following command:"
-echo "kubectl get pods -n ai-call-center -w"
-echo ""
-echo "The external IP for the SIP service is: ${HOST_IP}"
-echo "Use this IP in your SIP client to place a test call."
-echo ""
-print_header "IMPORTANT: If 'kubectl' commands fail with 'connection refused'"
-echo "This is a common issue because the script was run with 'sudo'."
-echo "To fix this, run the following three commands to grant your regular user"
-echo "access to the new Kubernetes cluster:"
-echo ""
-echo "mkdir -p \$HOME/.kube"
-echo "sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config"
-echo "sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config"
-echo ""
-echo "After running these commands, 'kubectl' will work correctly."
+    # Create the kubeadm config file to specify the CRI socket
+    cat <<EOF | tee kubeadm-config.yaml
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: "unix:///run/containerd/containerd.sock"
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+podNetworkCidr: "192.168.0.0/16"
+EOF
 
-exit 0
+    # Initialize the cluster using the config file
+    kubeadm init --config kubeadm-config.yaml
+
+    mkdir -p $HOME/.kube
+    cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    chown $(id -u):$(id -g) $HOME/.kube/config
+    if [ -n "$SUDO_USER" ]; then
+        mkdir -p /home/$SUDO_USER/.kube
+        cp -i /etc/kubernetes/admin.conf /home/$SUDO_USER/.kube/config
+        chown $SUDO_UID:$SUDO_GID /home/$SUDO_USER/.kube/config
+    fi
+
+    echo "Waiting for Kubernetes API server to be ready..."
+    until kubectl get nodes > /dev/null 2>&1; do
+        echo "API server not ready yet. Waiting..."
+        sleep 5
+    done
+    echo "Kubernetes API server is ready."
+
+    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/tigera-operator.yaml
+    kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/custom-resources.yaml
+
+    kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+else
+    echo "Kubernetes cluster already initialized. Skipping."
+fi
+
+# ... (rest of script is the same)
