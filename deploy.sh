@@ -21,23 +21,33 @@ function print_header() {
     echo "=============================================================================="
 }
 
+function wait_for_apt_lock() {
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+       echo "Waiting for other package manager processes (like unattended-upgrades) to finish..."
+       sleep 5
+    done
+}
+
 # --- Main Logic ---
 
 # Step 1: Install NVIDIA Drivers and Toolkit
 if ! check_command nvidia-smi; then
     print_header "Installing NVIDIA Drivers and Container Toolkit"
 
+    wait_for_apt_lock
     # Add NVIDIA package repositories
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
       && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-    # Install the latest CUDA drivers from the distribution's repository
+    wait_for_apt_lock
     sudo apt-get update
+
+    wait_for_apt_lock
     sudo apt-get install -y cuda-drivers
 
-    # Install the toolkit
+    wait_for_apt_lock
     sudo apt-get install -y nvidia-container-toolkit
 
     print_header "NVIDIA Drivers Installed. A reboot is required."
@@ -50,7 +60,9 @@ fi
 # Step 2: Install Docker and Docker Compose
 if ! check_command docker; then
     print_header "Installing Docker Engine"
+    wait_for_apt_lock
     sudo apt-get update
+    wait_for_apt_lock
     sudo apt-get install -y ca-certificates curl
     sudo install -m 0755 -d /etc/apt/keyrings
     sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -60,7 +72,11 @@ if ! check_command docker; then
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    wait_for_apt_lock
     sudo apt-get update
+
+    wait_for_apt_lock
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 else
     echo "Docker is already installed. Skipping."
@@ -83,7 +99,6 @@ sudo systemctl restart docker
 # Step 4: Initial Application Setup
 print_header "Setting up application environment"
 
-# Check if .env file exists, if not, copy it from .env.example
 if [ ! -f .env ]; then
     echo "Creating .env file from .env.example..."
     cp .env.example .env

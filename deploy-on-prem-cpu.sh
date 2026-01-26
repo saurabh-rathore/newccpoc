@@ -20,6 +20,13 @@ function print_header() {
     echo "================================================================================"
 }
 
+function wait_for_apt_lock() {
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+       echo "Waiting for other package manager processes (like unattended-upgrades) to finish..."
+       sleep 5
+    done
+}
+
 # --- Pre-flight Checks ---
 if [ "$EUID" -ne 0 ]; then
     echo "Please run this script as root (sudo ./deploy-on-prem-cpu.sh)"
@@ -29,13 +36,17 @@ fi
 # --- Step 1: Install Container Runtime (Docker) ---
 print_header "Installing Docker Engine"
 if ! command -v docker &> /dev/null; then
+    wait_for_apt_lock
     apt-get update
+    wait_for_apt_lock
     apt-get install -y ca-certificates curl
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    wait_for_apt_lock
     apt-get update
+    wait_for_apt_lock
     apt-get install -y docker-ce docker-ce-cli containerd.io
 else
     echo "Docker already installed. Skipping."
@@ -44,11 +55,15 @@ fi
 # --- Step 2: Install Kubernetes Tools ---
 print_header "Installing Kubernetes Tools (kubeadm, kubelet, kubectl)"
 if ! command -v kubeadm &> /dev/null; then
+    wait_for_apt_lock
     apt-get update
+    wait_for_apt_lock
     apt-get install -y apt-transport-https ca-certificates curl gpg
     curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
     echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+    wait_for_apt_lock
     apt-get update
+    wait_for_apt_lock
     apt-get install -y kubelet kubeadm kubectl
     apt-mark hold kubelet kubeadm kubectl
 else
