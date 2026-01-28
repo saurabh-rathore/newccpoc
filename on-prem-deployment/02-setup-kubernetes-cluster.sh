@@ -29,9 +29,13 @@ fi
 # --- Initialize Kubernetes Cluster ---
 if ! kubectl cluster-info &> /dev/null; then
     print_header "Initializing Kubernetes cluster with kubeadm..."
-    # Using a non-standard port to avoid conflicts with other services
-    # And specifying a pod network CIDR that is compatible with Calico
-    kubeadm init --pod-network-cidr=192.168.0.0/16 --apiserver-advertise-address=$(hostname -I | awk '{print $1}')
+
+    # Dynamically set the host IP in the kubeadm config file
+    HOST_IP=$(hostname -I | awk '{print $1}')
+    sed -i "s/YOUR_HOST_IP/$HOST_IP/g" kubeadm-config.yaml
+
+    # Initialize the cluster using the config file for robustness
+    kubeadm init --config kubeadm-config.yaml
 
     print_header "Configuring kubectl for the root user..."
     mkdir -p $HOME/.kube
@@ -51,11 +55,18 @@ else
 fi
 
 # --- Install CNI (Calico) ---
-print_header "Installing Calico CNI"
+print_header "Installing Calico CNI with MTU Auto-Detection"
 # Check if Calico is already installed by looking for one of its key deployments
 if ! kubectl get deployment -n kube-system calico-kube-controllers &> /dev/null; then
-    echo "Applying Calico CNI manifest..."
-    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+    echo "Downloading Calico manifest..."
+    curl -o /tmp/calico.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+
+    echo "Forcing Calico MTU Auto-Detection..."
+    # This is the recommended fix for networking issues in many on-prem environments
+    sed -i -e "s/veth_mtu: \"0\"/veth_mtu: \"autodetect\"/g" /tmp/calico.yaml
+
+    echo "Applying modified Calico CNI manifest..."
+    kubectl apply -f /tmp/calico.yaml
 
     echo "Waiting for Calico pods to be ready..."
     # This waits for the key Calico components to be up and running.

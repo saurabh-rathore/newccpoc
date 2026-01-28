@@ -28,7 +28,31 @@ The system is built on a microservices architecture, with each component running
 
 ---
 
-## On-Premise Deployment (Single-Node Kubernetes)
+## Simplified Testing Deployment (Docker Compose)
+
+For a fast, simple, and reliable way to run the entire system for testing and development, use the dedicated Docker Compose testing script. This method does **not** require Kubernetes.
+
+### Prerequisites
+
+-   A machine with Docker and the Docker Compose plugin (V2) installed.
+
+### One-Click Deployment
+
+This script will set up all required services (including a database and Asterisk) in a self-contained environment.
+
+```bash
+# Make the script executable
+chmod +x deploy-testing-docker.sh
+
+# Run the script
+./deploy-testing-docker.sh
+```
+
+After the script finishes, all services will be running in the background. You can check their status with `docker compose -f docker-compose.testing.yml ps`.
+
+---
+
+## Production Deployment (Single-Node Kubernetes)
 
 This is the recommended method for a production-ready, on-premise deployment. The process uses `kubeadm` to create a single-node Kubernetes cluster and deploys the application using a set of robust, re-runnable scripts.
 
@@ -76,14 +100,6 @@ After the deployment is complete, you can monitor the status of the pods:
 kubectl get pods -n ai-call-center -w
 ```
 
-### Other Deployment Options
-
--   **Simple Docker Compose**: For quick local testing without Kubernetes. See `docker-compose.yml`.
-  ```bash
-  docker-compose up -d
-  ```
--   **AWS EKS**: A script for deploying to Amazon's Elastic Kubernetes Service is provided (`deploy-eks.sh`).
-
 ---
 ## Asterisk Integration
 
@@ -99,4 +115,4 @@ exten => 1000,1,NoOp(New call to AI Call Center)
   same => n,Hangup()
 ```
 
-Make sure to replace `<your-kubernetes-node-ip>` with the actual IP address of your server.
+When using the Docker Compose testing deployment, Asterisk is already containerized and networked. You can connect your SIP client directly to the host machine's IP address on port 5060.

@@ -1,5 +1,5 @@
 fastapi
 uvicorn[standard]
 websockets
-ari-client
+asterisk-ari
 python-dotenv

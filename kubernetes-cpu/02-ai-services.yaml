@@ -63,7 +63,7 @@ spec:
         - containerPort: 8002
         env:
         - name: QDRANT_URL
-          value: "http://<your_external_qdrant_url>:6333"
+          value: "http://qdrant.ai-call-center.svc.cluster.local:6333"
         resources:
           limits:
             cpu: "4"
