@@ -6,7 +6,7 @@ This project provides a complete, production-ready, fully autonomous AI-powered 
 
 The system is designed to handle a high volume of concurrent calls, integrating directly with an Asterisk PBX. It leverages a suite of modern AI components to understand customer intent, retrieve relevant data, and provide natural, emotionally expressive responses.
 
--   **Asterisk Integration**: Receives inbound calls from Asterisk via the Asterisk Gateway Interface (AGI).
+-   **Asterisk Integration**: Receives inbound calls from Asterisk via the Asterisk REST Interface (ARI).
 -   **Speech-to-Text**: Converts the caller's speech into text in real-time.
 -   **Natural Language Understanding**: An LLM analyzes the text to determine intent and sentiment.
 -   **RAG Pipeline**: Retrieves information from a vector database (previous conversations, knowledge base) and customer data from APIs/DBs to form a comprehensive context.
@@ -91,14 +91,11 @@ To connect this system to Asterisk, you will need to configure your `extensions.
 
 **Example `extensions.conf`:**
 ```ini
-[from-outside]
-exten => s,1,NoOp(New call received)
-  ; Answer the call
+[from-internal]
+exten => 1000,1,NoOp(New call to AI Call Center)
   same => n,Answer()
-  ; Send the call to the AI Gateway via AGI
-  ; The Kubernetes service 'ai-voice-gateway' is exposed on port 4573
-  same => n,Agi(agi://<your-kubernetes-node-ip>:4573)
-  ; Hang up after the AGI script finishes
+  ; Send the call to the Stasis (ARI) application named 'ai-voice-gateway'
+  same => n,Stasis(ai-voice-gateway)
   same => n,Hangup()
 ```
 

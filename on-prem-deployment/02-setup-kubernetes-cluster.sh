@@ -54,8 +54,20 @@ fi
 print_header "Installing Calico CNI"
 # Check if Calico is already installed by looking for one of its key deployments
 if ! kubectl get deployment -n kube-system calico-kube-controllers &> /dev/null; then
+    echo "Applying Calico CNI manifest..."
     kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
-    echo "Calico CNI installed. It may take a minute for all pods to be ready."
+
+    echo "Waiting for Calico pods to be ready..."
+    # This waits for the key Calico components to be up and running.
+    kubectl wait --namespace kube-system \
+                    --for=condition=available deployment \
+                    --selector=k8s-app=calico-kube-controllers \
+                    --timeout=300s
+    kubectl wait --namespace kube-system \
+                    --for=condition=ready pod \
+                    --selector=k8s-app=calico-node \
+                    --timeout=300s
+    echo "Calico CNI is ready."
 else
     echo "Calico CNI appears to be already installed. Skipping."
 fi

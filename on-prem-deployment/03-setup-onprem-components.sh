@@ -11,13 +11,22 @@ check_root
 print_header "Setting up MetalLB for Load Balancing"
 if ! kubectl get namespace metallb-system &> /dev/null; then
     kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml
-    echo "MetalLB applied. Waiting for webhook to be ready..."
-    # Wait for the deployment of the controller to be available, which is a reliable signal the webhook is ready
-    kubectl wait --namespace metallb-system \
+    echo "MetalLB applied. Waiting for controller to be ready..."
+
+    if ! kubectl wait --namespace metallb-system \
                     --for=condition=available deployment \
                     --selector=component=controller \
-                    --timeout=300s
-    echo "MetalLB webhook is ready."
+                    --timeout=300s; then
+        echo "Error: MetalLB controller did not become ready in time."
+        echo "---"
+        echo "Dumping MetalLB pod status for debugging:"
+        kubectl get pods -n metallb-system
+        echo "---"
+        echo "Dumping MetalLB pod logs for debugging:"
+        kubectl logs --selector=component=controller -n metallb-system --tail=100
+        exit 1
+    fi
+    echo "MetalLB controller is ready."
 else
     echo "MetalLB namespace already exists. Assuming it's configured. Skipping install."
 fi
