@@ -24,8 +24,18 @@ fi
 
 # Apply the IPAddressPool configuration if it doesn't exist
 if ! kubectl get ipaddresspool -n metallb-system default-pool &> /dev/null; then
+    echo "Configuring MetalLB IPAddressPool. This may take a few attempts..."
+
+    ATTEMPTS=0
+    MAX_ATTEMPTS=5
+    SUCCESS=false
+
     HOST_IP=$(hostname -I | awk '{print $1}')
-    cat <<EOF | kubectl apply -f -
+
+    while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS + 1))
+
+        cat <<EOF | kubectl apply -f - && SUCCESS=true && break
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
 metadata:
@@ -35,7 +45,19 @@ spec:
   addresses:
   - ${HOST_IP}-${HOST_IP}
 EOF
-    echo "MetalLB IPAddressPool configured."
+
+        if [ "$SUCCESS" = false ]; then
+            echo "Attempt $ATTEMPTS failed. Webhook not ready? Retrying in 10 seconds..."
+            sleep 10
+        fi
+    done
+
+    if [ "$SUCCESS" = false ]; then
+        echo "Error: Could not configure MetalLB IPAddressPool after $MAX_ATTEMPTS attempts."
+        exit 1
+    fi
+
+    echo "MetalLB IPAddressPool configured successfully."
 else
     echo "MetalLB IPAddressPool 'default-pool' already exists. Skipping configuration."
 fi
