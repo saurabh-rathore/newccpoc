@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  stt-service:
+    build:
+      context: ./stt-service
+      dockerfile: Dockerfile.cpu
+    image: ai-stt-service:latest
+
+  llm-service:
+    build:
+      context: ./llm-service
+      dockerfile: Dockerfile.cpu
+    image: ai-llm-service:latest
+
+  tts-service:
+    build:
+      context: ./tts-service
+      dockerfile: Dockerfile
+    image: ai-tts-service:latest
+
+  ai-voice-gateway:
+    build:
+      context: ./ai-voice-gateway
+      dockerfile: Dockerfile
+    image: ai-voice-gateway:latest
