@@ -4,8 +4,8 @@ FROM andrius/asterisk:20
 # Copy the custom configuration files into the container
 COPY config/ari.conf /etc/asterisk/ari.conf
 COPY config/extensions.conf /etc/asterisk/extensions.conf
-COPY config/http.conf /etc/asterisk/http.conf
 COPY config/pjsip.conf /etc/asterisk/pjsip.conf
+COPY config/queues.conf /etc/asterisk/queues.conf
 
 # Asterisk runs as the 'asterisk' user. We need to set the ownership
 # of the config files so that the user can read them.
