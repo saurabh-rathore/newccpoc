@@ -8,7 +8,7 @@ print_header "Step 4: Building and Deploying the AI Call Center Application"
 print_header "Building application Docker images"
 # Use the CPU-specific docker-compose file
 if [ -f "docker-compose.cpu.yml" ]; then
-    docker-compose -f docker-compose.cpu.yml build
+    docker compose -f docker-compose.cpu.yml build
 else
     echo "Error: docker-compose.cpu.yml not found!"
     exit 1
