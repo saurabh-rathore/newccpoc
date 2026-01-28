@@ -1,5 +1,5 @@
-# Use the official Asterisk image as a base
-FROM asterisk/asterisk:20-certified
+# Use a free, community-maintained Asterisk image
+FROM andrius/asterisk:20
 
 # Copy the custom configuration files into the container
 COPY config/ari.conf /etc/asterisk/ari.conf
