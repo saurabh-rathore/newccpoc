@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Call Center - %i Service
+After=network.target
+
+[Service]
+# User and Group under which the service will run
+User=ubuntu
+Group=ubuntu
+
+# The directory where the service's code is located
+WorkingDirectory=/path/to/project/%i
+
+# The command to start the service, using the virtual environment's Python
+ExecStart=/path/to/project/%i/.venv/bin/uvicorn main:app --host 0.0.0.0 --port %p
+
+# Restart the service if it fails
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

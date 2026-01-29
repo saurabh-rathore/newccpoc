@@ -52,6 +52,31 @@ After the script finishes, all services will be running in the background. You c
 
 ---
 
+## Bare-Metal Deployment (No Containers)
+
+This method installs all software and services directly onto the host machine without using Docker or Kubernetes. This is a straightforward alternative for environments where containerization is not desired.
+
+### Prerequisites
+
+-   An Ubuntu 22.04 server.
+-   Root (sudo) access.
+
+### One-Click Deployment
+
+This single script will install, configure, and set up all components as background services.
+
+```bash
+# Make the script executable
+chmod +x deploy-bare-metal.sh
+
+# Run the script with sudo
+sudo ./deploy-bare-metal.sh
+```
+
+After the script completes, all AI services will be enabled to start on boot and can be managed using `systemctl` (e.g., `sudo systemctl status ai-voice-gateway`).
+
+---
+
 ## Production Deployment (Single-Node Kubernetes)
 
 This is the recommended method for a production-ready, on-premise deployment. The process uses `kubeadm` to create a single-node Kubernetes cluster and deploys the application using a set of robust, re-runnable scripts.

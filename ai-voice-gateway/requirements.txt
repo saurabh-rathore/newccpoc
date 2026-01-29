@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
 websockets
-asterisk-ari
 python-dotenv
+openapi-python-client
+aiohttp

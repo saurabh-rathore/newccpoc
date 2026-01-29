@@ -1,0 +1,4 @@
+[tool.openapi-python-client]
+package-name = "ari_client"
+package-version = "1.0.0"
+module-name = "ari_client"
