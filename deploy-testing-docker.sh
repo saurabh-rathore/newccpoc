@@ -32,8 +32,9 @@ fi
 
 echo "Starting all services via Docker Compose..."
 # The --build flag ensures images are rebuilt if the source code has changed.
+# The --no-cache flag ensures we use the latest Dockerfile changes.
 # The -d flag runs the containers in detached mode.
-docker compose -f docker-compose.testing.yml up --build -d
+docker compose -f docker-compose.testing.yml up --build --no-cache -d
 
 echo ""
 echo "========================================================================"
