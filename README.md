@@ -28,17 +28,39 @@ The system is built on a microservices architecture, with each component running
 
 ---
 
-## Simplified Testing Deployment (Docker Compose)
+## Deployment Options
 
-For a fast, simple, and reliable way to run the entire system for testing and development, use the dedicated Docker Compose testing script. This method does **not** require Kubernetes.
+This project offers multiple ways to deploy the services, from a simple audio file tester to a full production-ready Kubernetes setup.
+
+### 1. Simple Audio File Testing (Recommended First Step)
+
+This is the easiest way to test the core AI pipeline (STT -> LLM -> TTS) without involving the complexity of a real-time phone call. You provide an audio file and get an audio file back.
+
+**Directory:** `audio-file-tester/`
+
+```bash
+# Navigate to the testing directory
+cd audio-file-tester
+
+# Make the script executable
+chmod +x deploy-audio-test.sh
+
+# Run the script to start the AI services
+./deploy-audio-test.sh
+```
+To test, send a POST request with an audio file (e.g., a `.wav` file) to `http://localhost:8000/process-voice-note`.
+
+---
+
+### 2. Full System Testing with Telephony (Docker Compose)
+
+This method runs the entire system, including Asterisk, for full end-to-end testing of a live phone call. It is more complex than the audio file tester but does not require Kubernetes.
 
 ### Prerequisites
 
 -   A machine with Docker and the Docker Compose plugin (V2) installed.
 
 ### One-Click Deployment
-
-This script will set up all required services (including a database and Asterisk) in a self-contained environment.
 
 ```bash
 # Make the script executable
@@ -52,7 +74,7 @@ After the script finishes, all services will be running in the background. You c
 
 ---
 
-## Bare-Metal Deployment (No Containers)
+### 3. Bare-Metal Deployment (No Containers)
 
 This method installs all software and services directly onto the host machine without using Docker or Kubernetes. This is a straightforward alternative for environments where containerization is not desired.
 
@@ -79,7 +101,7 @@ After the script completes, all AI services will be enabled to start on boot and
 
 ## Production Deployment (Single-Node Kubernetes)
 
-This is the recommended method for a production-ready, on-premise deployment. The process uses `kubeadm` to create a single-node Kubernetes cluster and deploys the application using a set of robust, re-runnable scripts.
+This is the recommended method for a production-ready, on-premise deployment. It provides the most resilience and scalability.
 
 ### Prerequisites
 

@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai_test_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis
+    networks:
+      - ai_test_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.8.0
+    container_name: qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ai_test_net
+    ports:
+      - "6333:6333" # For REST API
+
+  stt-service:
+    build:
+      context: ../stt-service # Context is relative to the compose file
+      dockerfile: Dockerfile.cpu
+    image: ai-stt-service:latest
+    container_name: stt-service
+    networks:
+      - ai_test_net
+    depends_on:
+      - redis
+
+  llm-service:
+    build:
+      context: ../llm-service # Context is relative to the compose file
+      dockerfile: Dockerfile.cpu
+    image: ai-llm-service:latest
+    container_name: llm-service
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_HOST=postgres
+    networks:
+      - ai_test_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started # qdrant doesn't have a simple healthcheck
+
+  tts-service:
+    build:
+      context: ../tts-service # Context is relative to the compose file
+      dockerfile: Dockerfile
+    image: ai-tts-service:latest
+    container_name: tts-service
+    networks:
+      - ai_test_net
+
+  audio-gateway:
+    build:
+      context: . # Build context is the current directory
+      dockerfile: Dockerfile
+    image: audio-gateway:latest
+    container_name: audio-gateway
+    environment:
+      - STT_API_URL=http://stt-service:8001/stt
+      - LLM_API_URL=http://llm-service:8002/generate
+      - TTS_API_URL=http://tts-service:8003/tts
+    networks:
+      - ai_test_net
+    ports:
+      - "8000:8000"
+    depends_on:
+      - stt-service
+      - llm-service
+      - tts-service
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+networks:
+  ai_test_net:
+    driver: bridge
