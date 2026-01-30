@@ -6,7 +6,7 @@ echo "Comprehensive Cleanup Script"
 echo "========================================================================"
 echo "This script will aggressively remove Docker artifacts, clear package"
 echo "caches, and uninstall bare-metal services to free up disk space."
-echo "WARNING: This is a destructive operation and will remove all Docker"
+echo "WARNING: This is a destructive operation and will remove ALL Docker"
 echo "         containers, images, and volumes not currently in use."
 echo "========================================================================"
 echo ""
@@ -24,7 +24,7 @@ if command -v docker &> /dev/null; then
     docker stop $(docker ps -a -q) || true
 
     echo "Running 'docker system prune -a -f'..."
-    echo "This will remove all stopped containers, unused networks, dangling images, and build cache."
+    echo "This will remove all stopped containers, all networks not used by at least one container, all dangling images, and all build cache."
     docker system prune -a -f
 
     echo "Removing Docker volumes..."
