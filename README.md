@@ -153,3 +153,24 @@ exten => 1000,1,NoOp(New call to AI Call Center)
 ```
 
 When using the Docker Compose testing deployment, Asterisk is already containerized and networked. You can connect your SIP client directly to the host machine's IP address on port 5060.
+
+---
+
+## Troubleshooting
+
+### Error: "No space left on device"
+
+After multiple builds or failed deployment attempts, your system can fill up with orphaned Docker images, build caches, and unused data volumes.
+
+To clean up your system and reclaim disk space, a comprehensive cleanup script is provided.
+
+**WARNING:** This script is destructive and will remove all stopped Docker containers and unused images.
+
+```bash
+# Make the script executable
+chmod +x cleanup-all.sh
+
+# Run the script with sudo
+sudo ./cleanup-all.sh
+```
+This will aggressively prune your Docker system, clear package manager caches, and give you the option to remove any services installed by the bare-metal deployment.
