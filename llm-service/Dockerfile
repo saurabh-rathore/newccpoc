@@ -18,7 +18,7 @@ WORKDIR /app
 # Download the model before installing requirements to leverage Docker layer caching.
 ARG LLM_MODEL="TheBloke/Mixtral-8x7B-Instruct-v0.1-GPTQ"
 RUN pip3 install huggingface-hub && \
-    huggingface-cli download ${LLM_MODEL} --local-dir /models/${LLM_MODEL} --local-dir-use-symlinks False
+    python3 -m huggingface_hub.commands.cli download ${LLM_MODEL} --local-dir /models/${LLM_MODEL} --local-dir-use-symlinks False
 
 # Copy the requirements file into the container
 COPY requirements.txt .
