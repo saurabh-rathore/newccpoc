@@ -34,43 +34,33 @@ This project offers multiple ways to deploy the services, from a simple audio fi
 
 ### 1. Simple Audio File Testing (Recommended First Step)
 
-This is the easiest way to test the core AI pipeline (STT -> LLM -> TTS) without involving the complexity of a real-time phone call. You provide an audio file and get an audio file back.
+This is the easiest way to test the core AI pipeline (STT -> LLM -> TTS) without the complexity of a real-time phone call. You provide an audio file and get an audio file back.
 
-**Directory:** `audio-file-tester/`
-
-```bash
-# Navigate to the testing directory
-cd audio-file-tester
-
-# Make the script executable
-chmod +x deploy-audio-test.sh
-
-# Run the script to start the AI services
-./deploy-audio-test.sh
-```
-To test, send a POST request with an audio file (e.g., a `.wav` file) to `http://localhost:8000/process-voice-note`.
+For detailed instructions, please see the guide in the testing directory:
+**[-> Read the Audio File Testing Guide <-](./audio-file-tester/TESTING_GUIDE.md)**
 
 ---
 
 ### 2. Full System Testing with Telephony (Docker Compose)
 
-This method runs the entire system, including Asterisk, for full end-to-end testing of a live phone call. It is more complex than the audio file tester but does not require Kubernetes.
+Once you have verified the AI pipeline with the audio file test, you can proceed to a full, end-to-end test with a live phone call. This method runs the entire system, including Asterisk, using Docker Compose.
 
 ### Prerequisites
 
 -   A machine with Docker and the Docker Compose plugin (V2) installed.
+-   A SIP client (e.g., Zoiper, Linphone) to make a call.
 
 ### One-Click Deployment
 
 ```bash
 # Make the script executable
-chmod +x deploy-testing-docker.sh
+chmod +x deploy-telephony.sh
 
 # Run the script
-./deploy-testing-docker.sh
+./deploy-telephony.sh
 ```
 
-After the script finishes, all services will be running in the background. You can check their status with `docker compose -f docker-compose.testing.yml ps`.
+After the script finishes, all services will be running in the background. You can connect your SIP client to your machine's IP address on port 5060 and dial extension `1000` to speak with the AI.
 
 ---
 
