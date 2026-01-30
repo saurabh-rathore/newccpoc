@@ -2,14 +2,14 @@
 import os
 import logging
 import asyncio
-import json
-import base64
 import aiohttp
+import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 
 # --- NEW: Import the generated ARI client and models ---
 from ari_client import Client
-from ari_client.models import StasisStart, Playback
+from ari_client.models import StasisStart
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO)
@@ -19,12 +19,15 @@ ARI_URL = os.getenv("ARI_URL", "http://localhost:8088/")
 ARI_APP_NAME = os.getenv("ARI_APP_NAME", "ai-call-center")
 ARI_USER = os.getenv("ARI_USER", "ari_user")
 ARI_PASSWORD = os.getenv("ARI_PASSWORD", "ari_password")
-STT_WS_URL = os.getenv("STT_WS_URL", "ws://localhost:8001/ws/stt")
-LLM_API_URL = os.getenv("LLM_API_URL", "http://localhost:8002/generate")
-TTS_API_URL = os.getenv("TTS_API_URL", "http://localhost:8003/tts") # Using HTTP for TTS now
-GATEWAY_WS_URL_BASE = os.getenv("GATEWAY_WS_URL_BASE", "ws://localhost:8000/ws/media/")
+STT_API_URL = os.getenv("STT_API_URL", "http://stt-service:8001/stt")
+LLM_API_URL = os.getenv("LLM_API_URL", "http://llm-service:8002/generate")
+TTS_API_URL = os.getenv("TTS_API_URL", "http://tts-service:8003/tts")
+# This gateway's own external URL, so Asterisk can reach it
+GATEWAY_EXTERNAL_URL = os.getenv("GATEWAY_EXTERNAL_URL", "http://localhost:8000")
 
 app = FastAPI()
+# In-memory cache for TTS audio files
+media_cache = {}
 
 # --- Main Orchestration Logic ---
 
@@ -32,23 +35,18 @@ class CallHandler:
     def __init__(self, channel_id: str, client: Client):
         self.channel_id = channel_id
         self.client = client
-        self.stt_ws = None
         self.media_ws_ready = asyncio.Event()
+        self.stt_buffer = bytearray()
 
     async def handle_call(self):
         try:
             logger.info(f"[{self.channel_id}] Answering call.")
             await self.client.channels.answer(channelId=self.channel_id)
 
-            # The media WebSocket URL that Asterisk will connect to
-            media_ws_url = f"{GATEWAY_WS_URL_BASE}{self.channel_id}"
+            media_ws_url = f"{GATEWAY_EXTERNAL_URL.replace('http', 'ws')}/ws/media/{self.channel_id}"
 
-            async with aiohttp.ClientSession() as http_session, \
-                 aiohttp.ClientSession().ws_connect(STT_WS_URL) as self.stt_ws:
-
-                logger.info(f"[{self.channel_id}] Connected to STT service.")
-
-                # Tell Asterisk to start sending us media
+            async with aiohttp.ClientSession() as http_session:
+                logger.info(f"[{self.channel_id}] Starting media stream from Asterisk.")
                 await self.client.channels.play_with_id(
                     channelId=self.channel_id,
                     playbackId=f"media-stream-{self.channel_id}",
@@ -56,35 +54,46 @@ class CallHandler:
                 )
 
                 await asyncio.wait_for(self.media_ws_ready.wait(), timeout=10.0)
-                logger.info(f"[{self.channel_id}] Media WebSocket connected and ready.")
+                logger.info(f"[{self.channel_id}] Media WebSocket connected.")
 
-                await self.play_tts(http_session, "Welcome! How can I help you today?")
+                await self.play_tts(http_session, "Welcome! How may I help you today?")
 
-                # Main loop: process transcriptions from STT
-                async for stt_msg in self.stt_ws:
-                    if stt_msg.type == aiohttp.WSMsgType.TEXT:
-                        transcription = stt_msg.data.strip()
-                        if not transcription:
-                            continue
-
-                        logger.info(f"[{self.channel_id}] Transcription: '{transcription}'")
-
-                        llm_response = await self.get_llm_response(http_session, transcription)
-
-                        if "transfer to human" in llm_response.lower():
-                            await self.transfer_to_human(http_session)
-                            break
-
-                        await self.play_tts(http_session, llm_response)
+                # The media websocket will now handle audio processing
+                # This main handler task can wait until the call is hung up.
+                while self.channel_id in app.state.call_handlers:
+                    await asyncio.sleep(1)
 
         except Exception as e:
-            logger.error(f"[{self.channel_id}] Error in call: {e}", exc_info=True)
+            logger.error(f"[{self.channel_id}] Error in call handler: {e}", exc_info=True)
         finally:
-            logger.info(f"[{self.channel_id}] Hanging up and cleaning up resources.")
+            self.cleanup()
+
+    async def process_audio_chunk(self, audio_chunk: bytes, http_session: aiohttp.ClientSession):
+        # This is a simplified VAD: send audio when we have a full second of it
+        self.stt_buffer.extend(audio_chunk)
+        if len(self.stt_buffer) > 16000 * 2: # ~1 second of 16-bit audio
+            logger.info(f"[{self.channel_id}] Sending audio chunk for transcription.")
+            audio_to_send = self.stt_buffer
+            self.stt_buffer = bytearray() # Clear buffer
+
             try:
-                await self.client.channels.hangup(channelId=self.channel_id)
-            except Exception: pass
-            app.state.call_handlers.pop(self.channel_id, None)
+                transcription = await self.get_stt_transcription(http_session, audio_to_send)
+                if transcription:
+                    logger.info(f"[{self.channel_id}] Transcription: '{transcription}'")
+                    llm_response = await self.get_llm_response(http_session, transcription)
+                    if "transfer to human" in llm_response.lower():
+                        await self.transfer_to_human(http_session)
+                    else:
+                        await self.play_tts(http_session, llm_response)
+            except Exception as e:
+                logger.error(f"[{self.channel_id}] Error processing audio chunk: {e}")
+
+    async def get_stt_transcription(self, session: aiohttp.ClientSession, audio_bytes: bytes) -> str:
+        form = aiohttp.FormData()
+        form.add_field('file', audio_bytes, filename='audio.wav', content_type='audio/wav')
+        async with session.post(STT_API_URL, data=form) as resp:
+            data = await resp.json()
+            return data.get("transcription", "").strip()
 
     async def get_llm_response(self, session: aiohttp.ClientSession, text: str) -> str:
         payload = {"prompt": text, "customer_id": self.channel_id}
@@ -98,17 +107,12 @@ class CallHandler:
         async with session.post(TTS_API_URL, json=payload) as resp:
             if resp.status == 200:
                 audio_data = await resp.read()
-                # Use a unique ID for the playback
-                playback_id = f"tts-playback-{self.channel_id}-{asyncio.get_running_loop().time()}"
+                playback_id = str(uuid.uuid4())
+                media_cache[playback_id] = audio_data
 
-                # Instead of streaming, we save to a temp file and play, which is simpler and more reliable for this setup
-                temp_audio_path = f"/tmp/tts_{playback_id}.wav"
-                with open(temp_audio_path, "wb") as f:
-                    f.write(audio_data)
-
-                logger.info(f"[{self.channel_id}] Playing TTS audio from {temp_audio_path}")
-                await self.client.channels.play(channelId=self.channel_id, media=f"sound:{temp_audio_path.replace('.wav', '')}")
-                os.remove(temp_audio_path) # Clean up the temp file
+                media_url = f"sound:{GATEWAY_EXTERNAL_URL}/media/{playback_id}"
+                logger.info(f"[{self.channel_id}] Instructing Asterisk to play media from: {media_url}")
+                await self.client.channels.play(channelId=self.channel_id, media=media_url)
             else:
                 logger.error(f"[{self.channel_id}] Failed to get TTS audio.")
 
@@ -117,8 +121,21 @@ class CallHandler:
         await self.play_tts(session, "Please wait while I transfer you.")
         await self.client.channels.continueInDialplan(channelId=self.channel_id, context='default', extension='human-queue')
 
+    def cleanup(self):
+        logger.info(f"[{self.channel_id}] Hanging up and cleaning up resources.")
+        try:
+            asyncio.create_task(self.client.channels.hangup(channelId=self.channel_id))
+        except Exception: pass
+        app.state.call_handlers.pop(self.channel_id, None)
 
-# --- Asterisk Media WebSocket ---
+# --- Media Endpoints ---
+@app.get("/media/{playback_id}")
+async def get_media(playback_id: str):
+    if playback_id in media_cache:
+        audio_data = media_cache.pop(playback_id) # One-time access
+        return Response(content=audio_data, media_type="audio/wav")
+    return Response(status_code=404)
+
 @app.websocket("/ws/media/{channel_id}")
 async def media_websocket_endpoint(websocket: WebSocket, channel_id: str):
     await websocket.accept()
@@ -126,24 +143,19 @@ async def media_websocket_endpoint(websocket: WebSocket, channel_id: str):
 
     handler = app.state.call_handlers.get(channel_id)
     if not handler:
-        logger.error(f"[{channel_id}] No handler for this media stream.")
-        await websocket.close()
-        return
+        await websocket.close(); return
 
     handler.media_ws_ready.set()
 
     try:
-        while True:
-            message = await websocket.receive_bytes()
-            # Forward the raw audio bytes directly to the STT service
-            if handler.stt_ws and not handler.stt_ws.closed:
-                await handler.stt_ws.send_bytes(message)
-
+        async with aiohttp.ClientSession() as http_session:
+            while True:
+                message = await websocket.receive_bytes()
+                await handler.process_audio_chunk(message, http_session)
     except WebSocketDisconnect:
         logger.warning(f"[{channel_id}] Asterisk media WebSocket disconnected.")
     finally:
-        handler.media_ws_ready.clear()
-
+        handler.cleanup()
 
 # --- ARI Event Handling & Startup ---
 async def ari_event_loop():

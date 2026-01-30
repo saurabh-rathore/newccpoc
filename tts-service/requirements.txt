@@ -1,9 +1,7 @@
+TTS
 fastapi
 uvicorn[standard]
-websockets
-python-dotenv
-TTS
-torch
-torchaudio
-soundfile
+pydantic
 numpy
+soundfile
+torch

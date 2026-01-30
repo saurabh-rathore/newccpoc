@@ -1,12 +1,13 @@
 
 import os
 import logging
-import asyncio
 import io
-import numpy as np
+import wave
 import torch
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from websockets.exceptions import ConnectionClosed
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
 from TTS.api import TTS
 
 # --- Configuration ---
@@ -18,11 +19,9 @@ MODEL_NAME = os.getenv("TTS_MODEL", "tts_models/en/ljspeech/tacotron2-DDC")
 # --- Model Loading (with CPU fallback) ---
 logger.info(f"Loading TTS model: {MODEL_NAME}")
 try:
-    # Auto-detect device
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
 
-    # Initialize the TTS model on the selected device
     tts = TTS(MODEL_NAME).to(device)
     logger.info("TTS model loaded successfully.")
 except Exception as e:
@@ -31,33 +30,40 @@ except Exception as e:
 
 app = FastAPI()
 
-@app.websocket("/ws/tts")
-async def websocket_tts_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    logger.info("TTS WebSocket connection established.")
+class TTSRequest(BaseModel):
+    text: str
+
+@app.post("/tts")
+async def http_tts_endpoint(request: TTSRequest):
+    """
+    Accepts text and returns the synthesized speech as a WAV audio file.
+    """
     try:
-        while True:
-            text_to_synthesize = await websocket.receive_text()
-            logger.info(f"Received text for synthesis: '{text_to_synthesize}'")
+        logger.info(f"Received text for synthesis: '{request.text}'")
 
-            wav_chunks = tts.tts(text=text_to_synthesize)
+        # Synthesize the audio
+        wav_chunks = tts.tts(text=request.text)
 
-            audio_np = np.array(wav_chunks, dtype=np.float32)
-            audio_int16 = (audio_np * 32767).astype(np.int16)
-            audio_bytes = audio_int16.tobytes()
+        # The output is a list of integers, we need to convert it to bytes
+        # in a proper WAV format.
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2) # 16-bit
+            wf.setframerate(22050) # Coqui TTS default sample rate
 
-            chunk_size = 2048
-            for i in range(0, len(audio_bytes), chunk_size):
-                chunk = audio_bytes[i:i+chunk_size]
-                await websocket.send_bytes(chunk)
-                await asyncio.sleep(0.01)
+            # Convert float waveform to 16-bit PCM
+            pcm_data = (np.array(wav_chunks) * 32767).astype(np.int16)
+            wf.writeframes(pcm_data.tobytes())
 
-            logger.info(f"Finished streaming audio for: '{text_to_synthesize}'")
+        audio_bytes = buffer.getvalue()
+        logger.info(f"Synthesized audio of size: {len(audio_bytes)} bytes")
 
-    except (WebSocketDisconnect, ConnectionClosed):
-        logger.warning("TTS WebSocket disconnected.")
+        return Response(content=audio_bytes, media_type="audio/wav")
+
     except Exception as e:
-        logger.error(f"An error occurred in the TTS WebSocket: {e}", exc_info=True)
+        logger.error(f"Error during TTS processing: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to synthesize audio.")
 
 @app.get("/health")
 async def health_check():
