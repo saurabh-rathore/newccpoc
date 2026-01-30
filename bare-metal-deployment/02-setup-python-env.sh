@@ -42,31 +42,15 @@ for service in "${SERVICES[@]}"; do
         echo "Virtual environment already exists. Skipping creation."
     fi
 
-    # Special step for the voice gateway: generate the ARI client
-    if [ "$service" == "ai-voice-gateway" ]; {
-        echo "Generating ARI client for the voice gateway..."
-        # We need a running Asterisk to generate the client.
-        # Let's check if the Asterisk service is active on the host.
-        if ! systemctl is-active --quiet asterisk; then
-            echo "Warning: Asterisk service is not running. Attempting to start it..."
-            systemctl start asterisk
-            # Wait a few seconds for it to initialize
-            sleep 5
-            if ! systemctl is-active --quiet asterisk; then
-                echo "Error: Failed to start Asterisk. Cannot generate ARI client."
-                echo "Please ensure Asterisk is installed and can be run via 'systemctl start asterisk'."
-                exit 1
-            fi
-        fi
-
+    # Special step for the voice gateway: install dependencies and generate the ARI client
+    if [ "$service" == "ai-voice-gateway" ]; then
         # Install dependencies first, which now includes the generator
         if [ -f "$SERVICE_DIR/requirements.txt" ]; then
             echo "Installing Python dependencies from requirements.txt..."
             "$VENV_DIR/bin/pip" install --upgrade pip
             "$VENV_DIR/bin/pip" install -r "$SERVICE_DIR/requirements.txt"
         else
-            echo "Warning: requirements.txt not found for service '$service'. Skipping dependency installation."
-            # Continue to the next service in the loop
+            echo "Warning: requirements.txt not found for service '$service'. Skipping."
             continue
         fi
 
@@ -82,12 +66,13 @@ for service in "${SERVICES[@]}"; do
             fi
         fi
 
-        # Run the generation script from within the service directory, using the venv's bash
-        (cd "$SERVICE_DIR" && "$VENV_DIR/bin/bash" ./generate-ari-client.sh)
+        # Run the generation script from within the service directory, using the venv's shell
+        # The script itself uses commands that will now be in the venv's PATH
+        (cd "$SERVICE_DIR" && source "$VENV_DIR/bin/activate" && ./generate-ari-client.sh)
 
-        # No need to run pip install again, it was done above
-        continue # Skip the generic pip install below
-    }
+        # Skip the generic dependency install below since we've already done it.
+        continue
+    fi
 
     # Install dependencies for other services
     if [ -f "$SERVICE_DIR/requirements.txt" ]; then
